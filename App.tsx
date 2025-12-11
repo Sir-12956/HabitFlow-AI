@@ -26,12 +26,16 @@ import {
   Settings,
   Globe,
   Monitor,
-  BarChart2
+  BarChart2,
+  Sparkles,
+  Bell,
+  ToggleLeft,
+  ToggleRight
 } from 'lucide-react';
 import Heatmap, { HeatmapLegend } from './components/Heatmap';
 import AICoach from './components/AICoach';
 import { StorageService } from './services/storageService';
-import { generateSmartTodos } from './services/geminiService';
+import { generateSmartTodos, calculateVelocityReplanning } from './services/geminiService';
 import { Todo, Habit, Category, ThemeMode, Language } from './types';
 
 // Translation Dictionary
@@ -91,6 +95,21 @@ const TRANSLATIONS = {
     targetValue: "Daily Target (Max 5)",
     confirmDeleteCategory: "Are you sure you want to delete this category and all its heatmaps?",
     manualLinkError: "Cannot link a task to a 'Manual Check-in' heatmap. Please select a 'Task Driven' heatmap or create a new one.",
+    smartReplan: "Smart Replan",
+    replanLoading: "Calculated!",
+    replanSuccess: "AI Suggestion applied!",
+    replanError: "Replan failed.",
+    replanConfirmTitle: "AI Velocity Suggestion",
+    dailyReminder: "Daily Check-in Reminder",
+    dailyReminderDesc: "Show a popup when I first open the app if I haven't checked in.",
+    smartReplanLabel: "AI Velocity Replan",
+    smartReplanDesc: "Recalculate duration based on progress. Only takes effect once after saving.",
+    goodMorning: "Daily Reminder",
+    reminderIntro: "Here are the habits you asked to be reminded about today:",
+    done: "Done",
+    markDone: "Check In",
+    dismiss: "Dismiss",
+    saving: "Saving..."
   },
   zh: {
     myFocus: "我的专注",
@@ -147,6 +166,21 @@ const TRANSLATIONS = {
     targetValue: "每日目标 (最大 5)",
     confirmDeleteCategory: "确定要删除此分类及其下的所有热力图吗？",
     manualLinkError: "无法将任务关联到“手动打卡”热力图。请选择“任务驱动”热力图或新建一个。",
+    smartReplan: "智能重排",
+    replanLoading: "计算完成!",
+    replanSuccess: "AI建议已应用！",
+    replanError: "重排失败。",
+    replanConfirmTitle: "AI 速度建议",
+    dailyReminder: "每日打卡提醒",
+    dailyReminderDesc: "如果当天未打卡，首次打开应用时弹出提醒。",
+    smartReplanLabel: "AI 智能重排",
+    smartReplanDesc: "根据进度重新计算时长。仅在保存后生效一次。",
+    goodMorning: "每日提醒",
+    reminderIntro: "这是您今天需要提醒的习惯：",
+    done: "完成",
+    markDone: "打卡",
+    dismiss: "关闭",
+    saving: "保存中..."
   }
 };
 
@@ -183,7 +217,7 @@ const App: React.FC = () => {
   const [isHabitDropdownOpen, setIsHabitDropdownOpen] = useState(false);
   const [isTodoCategoryDropdownOpen, setIsTodoCategoryDropdownOpen] = useState(false);
   const [isGenerating, setIsGenerating] = useState(false);
-
+  
   // --- Modals & Menus ---
   const [contextMenu, setContextMenu] = useState<{
       x: number, 
@@ -193,6 +227,8 @@ const App: React.FC = () => {
   } | null>(null);
   
   const [showHabitModal, setShowHabitModal] = useState(false);
+  const [showDailyReminderModal, setShowDailyReminderModal] = useState(false);
+  const [pendingReminderHabits, setPendingReminderHabits] = useState<Habit[]>([]);
   const [editingHabitId, setEditingHabitId] = useState<string | null>(null);
   const [editingCategory, setEditingCategory] = useState<string | null>(null);
   
@@ -217,7 +253,10 @@ const App: React.FC = () => {
     durationValue: 1,
     durationUnit: 'year' as 'day' | 'week' | 'month' | 'year',
     description: '',
-    targetValue: 1
+    targetValue: 1,
+    dailyReminder: false,
+    smartReplanEnabled: false,
+    isSaving: false
   });
 
   // --- Responsive Check ---
@@ -232,6 +271,33 @@ const App: React.FC = () => {
   useEffect(() => StorageService.saveHabits(habits), [habits]);
   useEffect(() => StorageService.saveTodos(todos), [todos]);
   useEffect(() => StorageService.saveTheme(theme, customColor), [theme, customColor]);
+
+  // --- Daily Reminder Check on Mount ---
+  useEffect(() => {
+    const checkDailyReminders = () => {
+        const today = new Date().toISOString().split('T')[0];
+        const lastSeen = localStorage.getItem('habitflow_last_reminder_date');
+        
+        if (lastSeen === today) return; // Already showed today
+
+        const habitsToRemind = habits.filter(h => {
+            if (!h.dailyReminder) return false;
+            const currentLogs = h.logs[today] || 0;
+            return currentLogs < h.targetValue;
+        });
+
+        if (habitsToRemind.length > 0) {
+            setPendingReminderHabits(habitsToRemind);
+            setShowDailyReminderModal(true);
+            localStorage.setItem('habitflow_last_reminder_date', today);
+        }
+    };
+
+    // Small timeout to ensure initial data load feels complete before popup
+    const timer = setTimeout(checkDailyReminders, 1000);
+    return () => clearTimeout(timer);
+  }, []); // Run once on mount (conceptually) - though habits dependency might trigger it, we guard with lastSeen.
+
 
   // Click outside to close dropdowns
   useEffect(() => {
@@ -348,7 +414,8 @@ const App: React.FC = () => {
                 startDate: today,
                 durationDays: 365,
                 isVisibleOnDashboard: true,
-                targetValue: 1
+                targetValue: 1,
+                dailyReminder: false
             };
             setHabits(prev => [...prev, newHabit]);
             targetHabitId = newHabitId;
@@ -409,7 +476,10 @@ const App: React.FC = () => {
                   durationValue: Math.round(habit.durationDays / 30) || 1,
                   durationUnit: 'month',
                   description: habit.description || '',
-                  targetValue: habit.targetValue || 1
+                  targetValue: habit.targetValue || 1,
+                  dailyReminder: habit.dailyReminder || false,
+                  smartReplanEnabled: false,
+                  isSaving: false
               });
           }
       } else {
@@ -423,72 +493,101 @@ const App: React.FC = () => {
               durationValue: 1,
               durationUnit: 'year',
               description: '',
-              targetValue: 1
+              targetValue: 1,
+              dailyReminder: false,
+              smartReplanEnabled: false,
+              isSaving: false
           });
       }
       setShowHabitModal(true);
   };
 
-  const handleSaveHabit = () => {
+  const handleSaveHabit = async () => {
     if (!habitForm.name) return; 
+    setHabitForm(prev => ({ ...prev, isSaving: true }));
 
-    let finalCategoryId = '';
-    const trimmedCatName = habitCategoryInput.trim();
+    try {
+        let finalCategoryId = '';
+        const trimmedCatName = habitCategoryInput.trim();
 
-    if (trimmedCatName) {
-        const existingCat = categories.find(c => c.name.toLowerCase() === trimmedCatName.toLowerCase());
-        if (existingCat) {
-            finalCategoryId = existingCat.id;
+        if (trimmedCatName) {
+            const existingCat = categories.find(c => c.name.toLowerCase() === trimmedCatName.toLowerCase());
+            if (existingCat) {
+                finalCategoryId = existingCat.id;
+            } else {
+                const newCatId = crypto.randomUUID();
+                const newCat: Category = { id: newCatId, name: trimmedCatName, order: categories.length };
+                setCategories(prev => [...prev, newCat]);
+                finalCategoryId = newCatId;
+            }
         } else {
-            const newCatId = crypto.randomUUID();
-            const newCat: Category = { id: newCatId, name: trimmedCatName, order: categories.length };
-            setCategories(prev => [...prev, newCat]);
-            finalCategoryId = newCatId;
+            // Fallback to "Default" logic
+            const defaultCat = categories.find(c => c.name === 'Default');
+            if (defaultCat) {
+                finalCategoryId = defaultCat.id;
+            } else {
+                const newCatId = crypto.randomUUID();
+                const newCat: Category = { id: newCatId, name: 'Default', order: categories.length };
+                setCategories(prev => [...prev, newCat]);
+                finalCategoryId = newCatId;
+            }
         }
-    } else {
-        // Fallback to "Default" logic if input is empty
-        const defaultCat = categories.find(c => c.name === 'Default');
-        if (defaultCat) {
-            finalCategoryId = defaultCat.id;
+
+        let durationDays = calculateDurationDays();
+        const habitToEdit = editingHabitId ? habits.find(h => h.id === editingHabitId) : null;
+
+        // --- Smart Replan Logic ---
+        if (habitForm.smartReplanEnabled && editingHabitId && habitToEdit) {
+             try {
+                const result = await calculateVelocityReplanning(
+                    habitForm.name,
+                    habitForm.startDate,
+                    durationDays,
+                    habitToEdit.logs
+                );
+                if (result && result.newDurationDays) {
+                    durationDays = result.newDurationDays;
+                    // Note: We silently apply it as the user opted in via switch.
+                }
+             } catch (e) {
+                 console.error("Replan failed, using default duration", e);
+             }
+        }
+
+        if (editingHabitId) {
+            setHabits(prev => prev.map(h => h.id === editingHabitId ? {
+                ...h,
+                name: habitForm.name,
+                categoryId: finalCategoryId,
+                color: habitForm.color,
+                isManual: habitForm.type === 'manual',
+                startDate: habitForm.startDate,
+                durationDays: durationDays,
+                description: habitForm.description,
+                targetValue: habitForm.targetValue || 1,
+                dailyReminder: habitForm.dailyReminder
+            } : h));
         } else {
-            const newCatId = crypto.randomUUID();
-            const newCat: Category = { id: newCatId, name: 'Default', order: categories.length };
-            setCategories(prev => [...prev, newCat]);
-            finalCategoryId = newCatId;
+            const newHabit: Habit = {
+                id: crypto.randomUUID(),
+                name: habitForm.name,
+                categoryId: finalCategoryId,
+                color: habitForm.color,
+                isManual: habitForm.type === 'manual',
+                logs: {},
+                startDate: habitForm.startDate,
+                durationDays: durationDays,
+                isVisibleOnDashboard: true,
+                description: habitForm.description,
+                targetValue: habitForm.targetValue || 1,
+                dailyReminder: habitForm.dailyReminder
+            };
+            setHabits(prev => [...prev, newHabit]);
         }
+        setShowHabitModal(false);
+    } finally {
+        setHabitForm(prev => ({ ...prev, isSaving: false }));
     }
-
-    const durationDays = calculateDurationDays();
-
-    if (editingHabitId) {
-        setHabits(prev => prev.map(h => h.id === editingHabitId ? {
-            ...h,
-            name: habitForm.name,
-            categoryId: finalCategoryId,
-            color: habitForm.color,
-            isManual: habitForm.type === 'manual',
-            startDate: habitForm.startDate,
-            durationDays: durationDays,
-            description: habitForm.description,
-            targetValue: habitForm.targetValue || 1
-        } : h));
-    } else {
-        const newHabit: Habit = {
-            id: crypto.randomUUID(),
-            name: habitForm.name,
-            categoryId: finalCategoryId,
-            color: habitForm.color,
-            isManual: habitForm.type === 'manual',
-            logs: {},
-            startDate: habitForm.startDate,
-            durationDays: durationDays,
-            isVisibleOnDashboard: true,
-            description: habitForm.description,
-            targetValue: habitForm.targetValue || 1
-        };
-        setHabits(prev => [...prev, newHabit]);
-    }
-    setShowHabitModal(false);
   };
 
   const handleManualCheckIn = (habitId: string, dateStr: string) => {
@@ -501,6 +600,15 @@ const App: React.FC = () => {
       
       return { ...h, logs: { ...h.logs, [dateStr]: newCount } };
     }));
+    
+    // Also remove from pending reminders if completed
+    if (dateStr === today) {
+         setPendingReminderHabits(prev => prev.filter(h => h.id !== habitId));
+         // If last one, close modal
+         if (pendingReminderHabits.length <= 1 && pendingReminderHabits.find(h => h.id === habitId)) {
+             setShowDailyReminderModal(false);
+         }
+    }
   };
 
   const toggleHabitVisibility = (habitId: string) => {
@@ -1180,6 +1288,59 @@ const App: React.FC = () => {
         </div>
       )}
 
+      {/* --- Daily Reminder Modal --- */}
+      {showDailyReminderModal && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-md p-4 animate-fade-in">
+              <div className={`w-full max-w-md rounded-2xl shadow-2xl p-6 ${themeStyles.surface} ${themeStyles.text} border ${themeStyles.border}`}>
+                  <div className="flex items-center gap-3 mb-4">
+                      <div className="bg-yellow-500/20 p-2 rounded-full text-yellow-500">
+                          <Bell size={24} />
+                      </div>
+                      <div>
+                        <h2 className="text-xl font-bold">{t.goodMorning}</h2>
+                        <p className="text-xs opacity-60">{new Date().toLocaleDateString(language === 'zh' ? 'zh-CN' : 'en-US', { weekday: 'long', month: 'long', day: 'numeric' })}</p>
+                      </div>
+                  </div>
+                  
+                  <p className="mb-4 opacity-80 text-sm">{t.reminderIntro}</p>
+
+                  <div className="space-y-2 max-h-[50vh] overflow-y-auto mb-6">
+                      {pendingReminderHabits.map(h => (
+                          <div key={h.id} className="flex items-center justify-between p-3 rounded-xl bg-black/20 border border-white/5">
+                              <div className="flex items-center gap-3">
+                                  <div 
+                                      className={`w-3 h-3 rounded-full ${h.color.startsWith('#') ? '' : h.color}`}
+                                      style={h.color.startsWith('#') ? {backgroundColor: h.color} : {}}
+                                  />
+                                  <span className="font-medium">{h.name}</span>
+                              </div>
+                              
+                              {h.isManual ? (
+                                  <button 
+                                      onClick={() => handleManualCheckIn(h.id, today)}
+                                      className="text-xs px-3 py-1.5 bg-primary/20 text-primary hover:bg-primary hover:text-white rounded-lg transition-colors font-medium"
+                                  >
+                                      {t.markDone}
+                                  </button>
+                              ) : (
+                                  <div className="text-[10px] opacity-50 border border-current px-2 py-1 rounded">
+                                      {t.linkedToTodos}
+                                  </div>
+                              )}
+                          </div>
+                      ))}
+                  </div>
+
+                  <button 
+                    onClick={() => setShowDailyReminderModal(false)}
+                    className="w-full py-3 bg-white/10 hover:bg-white/20 rounded-xl font-medium transition-colors"
+                  >
+                      {t.dismiss}
+                  </button>
+              </div>
+          </div>
+      )}
+
       {/* --- Habit Modal (Create & Edit) --- */}
       {showHabitModal && (
           <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm p-4">
@@ -1309,6 +1470,46 @@ const App: React.FC = () => {
                           </div>
                       </div>
 
+                      {/* Daily Reminder Toggle */}
+                      <div 
+                         onClick={() => setHabitForm({...habitForm, dailyReminder: !habitForm.dailyReminder})}
+                         className={`p-3 border rounded-xl cursor-pointer transition-all flex items-center justify-between ${habitForm.dailyReminder ? 'border-yellow-500/50 bg-yellow-500/10' : 'border-white/10 hover:border-white/20'}`}
+                      >
+                         <div className="flex items-center gap-3">
+                             <div className={`p-2 rounded-full ${habitForm.dailyReminder ? 'bg-yellow-500 text-white' : 'bg-white/5 text-slate-400'}`}>
+                                 <Bell size={16} />
+                             </div>
+                             <div>
+                                 <div className="font-bold text-sm">{t.dailyReminder}</div>
+                                 <div className="text-[10px] opacity-60 leading-tight max-w-[200px]">{t.dailyReminderDesc}</div>
+                             </div>
+                         </div>
+                         <div className={`text-2xl ${habitForm.dailyReminder ? 'text-yellow-500' : 'text-slate-600'}`}>
+                             {habitForm.dailyReminder ? <ToggleRight /> : <ToggleLeft />}
+                         </div>
+                      </div>
+
+                      {/* Smart Replan Switch (Only for existing habits) */}
+                      {editingHabitId && (
+                        <div 
+                            onClick={() => setHabitForm({...habitForm, smartReplanEnabled: !habitForm.smartReplanEnabled})}
+                            className={`p-3 border rounded-xl cursor-pointer transition-all flex items-center justify-between ${habitForm.smartReplanEnabled ? 'border-indigo-500/50 bg-indigo-500/10' : 'border-white/10 hover:border-white/20'}`}
+                        >
+                            <div className="flex items-center gap-3">
+                                <div className={`p-2 rounded-full ${habitForm.smartReplanEnabled ? 'bg-indigo-500 text-white' : 'bg-white/5 text-slate-400'}`}>
+                                    <Sparkles size={16} />
+                                </div>
+                                <div>
+                                    <div className="font-bold text-sm">{t.smartReplanLabel}</div>
+                                    <div className="text-[10px] opacity-60 leading-tight max-w-[200px]">{t.smartReplanDesc}</div>
+                                </div>
+                            </div>
+                            <div className={`text-2xl ${habitForm.smartReplanEnabled ? 'text-indigo-500' : 'text-slate-600'}`}>
+                                {habitForm.smartReplanEnabled ? <ToggleRight /> : <ToggleLeft />}
+                            </div>
+                        </div>
+                      )}
+
                       {/* Target Daily Value */}
                       <div>
                           <label className="flex items-center gap-2 text-xs uppercase tracking-wider font-semibold opacity-50 mb-1">
@@ -1360,9 +1561,10 @@ const App: React.FC = () => {
 
                       <button 
                         onClick={handleSaveHabit}
-                        disabled={!habitForm.name}
-                        className="w-full py-3 bg-primary hover:bg-blue-600 text-white font-bold rounded-xl mt-4 disabled:opacity-50 transition-colors shadow-lg shadow-primary/20"
+                        disabled={!habitForm.name || habitForm.isSaving}
+                        className="w-full py-3 bg-primary hover:bg-blue-600 text-white font-bold rounded-xl mt-4 disabled:opacity-50 transition-colors shadow-lg shadow-primary/20 flex items-center justify-center gap-2"
                       >
+                          {habitForm.isSaving && <div className="w-4 h-4 border-2 border-white/50 border-t-white rounded-full animate-spin"/>}
                           {editingHabitId ? t.saveChanges : t.createHeatmap}
                       </button>
                   </div>

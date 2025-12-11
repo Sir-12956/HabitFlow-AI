@@ -36,7 +36,8 @@ export const StorageService = {
       return habits.map((h: any) => ({
         ...h,
         isVisibleOnDashboard: h.isVisibleOnDashboard ?? true,
-        targetValue: h.targetValue ?? 1
+        targetValue: h.targetValue ?? 1,
+        dailyReminder: h.dailyReminder ?? false
       }));
     } catch (e) {
       return DEFAULT_HABITS;

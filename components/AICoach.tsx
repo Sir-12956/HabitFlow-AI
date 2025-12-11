@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { analyzeHabits } from '../services/geminiService';
 import { Habit, Todo, Language } from '../types';
-import { Sparkles, Loader2, Trophy, Quote, AlertCircle } from 'lucide-react';
+import { Sparkles, Loader2, Trophy, Quote, AlertCircle, Calendar } from 'lucide-react';
 
 interface AICoachProps {
   habits: Habit[];
@@ -21,7 +21,11 @@ const TRANSLATIONS = {
     summaryTitle: "Summary",
     adviceTitle: "Coach's Advice",
     resetBtn: "Reset Analysis",
-    error: "Failed to contact AI Coach. Check your API Key."
+    error: "Failed to contact AI Coach. Check your API Key.",
+    from: "From",
+    to: "To",
+    optional: "(Optional)",
+    analyzeAll: "Analyzing All Time"
   },
   zh: {
     coachTitle: "AI 效率教练",
@@ -34,12 +38,18 @@ const TRANSLATIONS = {
     summaryTitle: "摘要",
     adviceTitle: "教练建议",
     resetBtn: "重置分析",
-    error: "无法联系AI教练。请检查API密钥。"
+    error: "无法联系AI教练。请检查API密钥。",
+    from: "从",
+    to: "至",
+    optional: "(可选)",
+    analyzeAll: "分析所有时间"
   }
 };
 
 const AICoach: React.FC<AICoachProps> = ({ habits, todos, language }) => {
   const [loading, setLoading] = useState(false);
+  const [startDate, setStartDate] = useState('');
+  const [endDate, setEndDate] = useState('');
   const [analysis, setAnalysis] = useState<{
     score: number;
     summary: string;
@@ -52,7 +62,7 @@ const AICoach: React.FC<AICoachProps> = ({ habits, todos, language }) => {
   const handleAnalysis = async () => {
     setLoading(true);
     try {
-      const result = await analyzeHabits(habits, todos);
+      const result = await analyzeHabits(habits, todos, startDate || undefined, endDate || undefined);
       setAnalysis(result);
     } catch (e) {
       alert(t.error);
@@ -65,20 +75,39 @@ const AICoach: React.FC<AICoachProps> = ({ habits, todos, language }) => {
     <div className="bg-gradient-to-br from-indigo-900 to-slate-900 rounded-xl p-6 border border-indigo-500/30 shadow-xl relative overflow-hidden">
       <div className="absolute top-0 right-0 w-64 h-64 bg-indigo-500/10 rounded-full blur-3xl -mr-16 -mt-16 pointer-events-none"></div>
       
-      <div className="flex items-center justify-between mb-4 relative z-10">
+      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 mb-4 relative z-10">
         <h2 className="text-xl font-bold flex items-center gap-2 text-white">
           <Sparkles className="w-5 h-5 text-yellow-400" />
           {t.coachTitle}
         </h2>
+        
         {!analysis && (
-          <button
-            onClick={handleAnalysis}
-            disabled={loading}
-            className="flex items-center gap-2 px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg text-sm font-medium transition-colors disabled:opacity-50"
-          >
-            {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Sparkles className="w-4 h-4" />}
-            {t.analyzeBtn}
-          </button>
+            <div className="flex flex-col md:flex-row gap-2">
+                <div className="flex items-center gap-2 bg-black/20 p-1 rounded-lg border border-white/10">
+                    <span className="text-xs opacity-50 pl-2">{t.from}</span>
+                    <input 
+                        type="date" 
+                        value={startDate}
+                        onChange={(e) => setStartDate(e.target.value)}
+                        className="bg-transparent border-none text-xs text-white outline-none w-28 [&::-webkit-calendar-picker-indicator]:invert"
+                    />
+                    <span className="text-xs opacity-50">{t.to}</span>
+                    <input 
+                        type="date" 
+                        value={endDate}
+                        onChange={(e) => setEndDate(e.target.value)}
+                        className="bg-transparent border-none text-xs text-white outline-none w-28 [&::-webkit-calendar-picker-indicator]:invert"
+                    />
+                </div>
+                <button
+                    onClick={handleAnalysis}
+                    disabled={loading}
+                    className="flex items-center justify-center gap-2 px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg text-sm font-medium transition-colors disabled:opacity-50 shadow-lg shadow-indigo-500/20"
+                >
+                    {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Sparkles className="w-4 h-4" />}
+                    {t.analyzeBtn}
+                </button>
+            </div>
         )}
       </div>
 
@@ -102,6 +131,14 @@ const AICoach: React.FC<AICoachProps> = ({ habits, todos, language }) => {
               <div className="text-lg font-medium text-slate-200">
                 {analysis.score >= 80 ? t.scoreOutstanding : analysis.score >= 50 ? t.scoreSteady : t.scoreNeedsAttention}
               </div>
+              {(startDate || endDate) ? (
+                 <div className="text-xs opacity-50 mt-1 flex items-center gap-1">
+                     <Calendar size={10} />
+                     {startDate || '...'} - {endDate || '...'}
+                 </div>
+              ) : (
+                <div className="text-xs opacity-50 mt-1">{t.analyzeAll}</div>
+              )}
             </div>
           </div>
 

@@ -25,6 +25,7 @@ export interface Habit {
   durationDays: number; // How many days to show in the heatmap
   isVisibleOnDashboard: boolean;
   targetValue: number; // Daily count required to reach max intensity (default 1)
+  dailyReminder?: boolean; // If true, shows in daily popup
 }
 
 export interface HeatmapDataPoint {
