@@ -1,9 +1,12 @@
+
 import { GoogleGenAI } from "@google/genai";
 import { Habit, Todo } from '../types';
 
+// Helper to initialize the Gemini client with the API key from environment variables
 const getClient = () => {
     const apiKey = process.env.API_KEY;
     if (!apiKey) return null;
+    // Always use named parameter for apiKey initialization
     return new GoogleGenAI({ apiKey });
 };
 
@@ -84,15 +87,17 @@ export const analyzeHabits = async (
     `;
 
     try {
+        // Use gemini-3-flash-preview for general text tasks as per guidelines
         const response = await ai.models.generateContent({
-            model: 'gemini-2.5-flash',
+            model: 'gemini-3-flash-preview',
             contents: prompt,
             config: {
                 responseMimeType: "application/json"
             }
         });
 
-        return JSON.parse(response.text);
+        // Use .text property directly to access generated response
+        return JSON.parse(response.text || '{}');
     } catch (error) {
         console.error("Gemini Analysis Failed:", error);
         throw error;
@@ -109,14 +114,15 @@ export const generateSmartTodos = async (habitName: string) => {
     `;
 
     try {
+        // Use gemini-3-flash-preview for general text tasks
         const response = await ai.models.generateContent({
-            model: 'gemini-2.5-flash',
+            model: 'gemini-3-flash-preview',
             contents: prompt,
             config: {
                 responseMimeType: "application/json"
             }
         });
-        return JSON.parse(response.text) as string[];
+        return JSON.parse(response.text || '[]') as string[];
     } catch (error) {
         console.error("Gemini Task Gen Failed:", error);
         return ["Just start for 5 minutes", "Review your goals", "Prepare for tomorrow"];
@@ -164,14 +170,15 @@ export const calculateVelocityReplanning = async (
     `;
 
     try {
+        // Use gemini-3-flash-preview for reasoning tasks
         const response = await ai.models.generateContent({
-            model: 'gemini-2.5-flash',
+            model: 'gemini-3-flash-preview',
             contents: prompt,
             config: {
                 responseMimeType: "application/json"
             }
         });
-        return JSON.parse(response.text) as { newDurationDays: number, reasoning: string };
+        return JSON.parse(response.text || '{}') as { newDurationDays: number, reasoning: string };
     } catch (error) {
         console.error("Gemini Replan Failed:", error);
         throw error;
